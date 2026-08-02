@@ -12,7 +12,7 @@ The PPX itself is very very simple - just swap out the embedded language string 
 npm i rescript-embed-lang
 ```
 
-And then add the PPX to your `bsconfig.json`:
+And then add the PPX to your `rescript.json`:
 
 ```json
 "ppx-flags": ["rescript-embed-lang/ppx"]
@@ -123,6 +123,108 @@ The formula for what code to refer to when transforming is be: `<filename>__<gen
 3. Finally, we add a generic `default` a target value name, just to have something to refer to.
 
 > Remember, the actual codegen creating the module we're referring to here from the source `css` text isn't part of this package. This package is just about making it simple to tie together generated things with its source in ReScript.
+
+
+### Deterministic named generation
+
+Generators can opt into one generated file per embed by deriving a stable name with the same ECMAScript regular expression in Node and the native PPX:
+
+```rescript
+let embed = RescriptEmbedLang.make(
+  ~extensionPattern=Generic("gqlExternalSchema"),
+  ~generatedName=Regex({
+    pattern: "^[ \\t]*(?:query|mutation|subscription)[ \\t\\r\\n]+([_A-Za-z][_0-9A-Za-z]*)",
+    flags: "m",
+    capture: Numbered(1),
+    cardinality: ExactlyOne,
+  }),
+  ~setup=RescriptEmbedLang.defaultSetup,
+  ~generate,
+  ~cliHelpText,
+)
+```
+
+Value embeds are the primary API:
+
+```rescript
+// Ga4Setup.res
+let query = %generated.gqlExternalSchema(`
+  query Ga4Properties {
+    ga4Properties {
+      id
+    }
+  }
+`)
+
+await client->run(query, variables)
+```
+
+They also work inline in any expression position:
+
+```rescript
+await client->run(
+  %generated.gqlExternalSchema(`
+    query Ga4Properties {
+      ga4Properties {
+        id
+      }
+    }
+  `),
+  variables,
+)
+```
+
+The generator emits the stable module `Ga4Setup__gqlExternalSchema__Ga4Properties.res`. Its generated content is exposed at the module root, so a GraphQL generator can provide `variables`, `response`, `operation`, and `default`. A value embed expands directly to:
+
+```rescript
+Ga4Setup__gqlExternalSchema__Ga4Properties.default
+```
+
+Use a module embed when callers also want a convenient local name for the generated types and operation:
+
+```rescript
+module Ga4Properties = %generated.gqlExternalSchema(`
+  query Ga4Properties {
+    ga4Properties {
+      id
+    }
+  }
+`)
+
+type variables = Ga4Properties.variables
+type response = Ga4Properties.response
+
+await client->run(Ga4Properties.default, variables)
+```
+
+Generation must run before ReScript compilation. There are no source hashes in the generated API or PPX target; operation names provide stable generated filenames and module references.
+
+The generator writes the versioned PPX configuration itself, so the regular expression is not duplicated in `rescript.json`:
+
+```bash
+my-generator generate --src ./src --output ./lib/bs \
+  --embed-lang-config ./lib/bs/rescript-embed-lang.json
+```
+
+Pass that file explicitly to the PPX:
+
+```json
+{
+  "ppx-flags": [
+    [
+      "rescript-embed-lang/ppx",
+      "-enable-generic-transform",
+      "-embed-lang-config",
+      "./lib/bs/rescript-embed-lang.json"
+    ]
+  ]
+}
+```
+
+Generation is staged before commit, detects case-insensitive and user-module collisions, removes only files recorded in its ownership index, and includes extra emitted artifacts in the same transaction. Watch runs are serialized and coalesced.
+
+`Sequential` remains the default, preserving the existing `M1`, `M2`, and monolithic-file behavior.
+
 
 ### SQL
 
